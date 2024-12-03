@@ -3,24 +3,24 @@ requires = ["flit_core >=3.2,<4"]
 build-backend = "flit_core.buildapi"
 
 [project]
-name = {{ cookiecutter.module_name|tojson }}
+name = sql-assistant
 version = "0.0.1"
 description = {{ cookiecutter.description|tojson }}
 authors = [
-  { name = {{ cookiecutter.author_name|tojson }} },
+  { name="João Pedro Alves", email="jotapedro1997@gmail.com" },
 ]
-{% if cookiecutter.open_source_license != 'No license file' %}license = { file = "LICENSE" }{% endif %}
 readme = "README.md"
 classifiers = [
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    {% if cookiecutter.open_source_license == 'MIT' %}"License :: OSI Approved :: MIT License"{% elif cookiecutter.open_source_license == 'BSD-3-Clause' %}"License :: OSI Approved :: BSD License"{% endif %}
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Development Status :: 3 - Alpha",
 ]
-requires-python = "~={{ cookiecutter.python_version_number }}"
+requires-python = ">=3.9"
 
 [tool.black]
 line-length = 93
