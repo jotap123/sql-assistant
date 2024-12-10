@@ -4,6 +4,7 @@ einops
 accelerate
 bitsandbytes
 torch
+langgraph
 langchain
 langchain-community
 langchain-huggingface
