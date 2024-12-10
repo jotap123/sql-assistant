@@ -12,7 +12,6 @@ from sql_assistant.llm.QA.utils import (
     State,
     SubmitFinalAnswer,
     create_tool_node_with_fallback,
-    handle_tool_error,
     load_llm_chat,
 )
 from sql_assistant.llm.QA.constants import chat, coder, query_check_system, query_gen_system

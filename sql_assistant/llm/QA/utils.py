@@ -1,11 +1,11 @@
-from typing import Annotated
+from typing import Annotated, Any
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 from langgraph.prebuilt import ToolNode
 from langgraph.graph.message import AnyMessage, add_messages
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableLambda, RunnableWithFallbacks
-from langchain_huggingface import HuggingFacePipeline, HuggingFaceEndpoint, ChatHuggingFace
+from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 
 
 class State(TypedDict):
