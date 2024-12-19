@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Literal, Tuple
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph, END
 
 from sql_assistant.extractor.database import DatabaseConnection
 from sql_assistant.extractor.chain import SQLChains
@@ -24,7 +24,7 @@ class SQLAgent:
         self,
         db_path: Path,
         llm: BaseChatModel,
-        max_retries: int = 2
+        max_retries: int = 1
     ):
         self.db = DatabaseConnection(db_path)
         self.chains = SQLChains(llm)
@@ -42,6 +42,8 @@ class SQLAgent:
                 return "correct"
             case QueryStatus.READY:
                 return "execute"
+            case QueryStatus.FAILED:
+                return "end"
             case _:
                 return "end"
 
@@ -89,7 +91,7 @@ class SQLAgent:
         })
         
         state.query.text = corrected_query
-        state.query.status = QueryStatus.NEEDS_REVIEW
+        state.query.status = QueryStatus.READY
         state.query.retry_count += 1
         state.messages.append(AIMessage(content=f"Corrected SQL Query: {corrected_query}"))
         return state
@@ -98,8 +100,12 @@ class SQLAgent:
     def _execute(self, state: AgentState) -> AgentState:
         result = self.db.execute_query(state.query.text)
         state.result = result
+
+        print(state.query)
+        print(result.success)
         
         if result.success and result.data is not None:
+            print("SUCCESS")
             state.query.status = QueryStatus.COMPLETE
             state.df = result.data  # Store the DataFrame in state
 
@@ -107,32 +113,44 @@ class SQLAgent:
                 f"Query executed successfully. Found {len(result.data)} rows.\n\n"
             )
         else:
-            state.query.status = QueryStatus.NEEDS_CORRECTION
+            print("FAIL")
             message = f"Error executing query: {result.error}"
+            if state.query.retry_count >= self.max_retries:
+                state.query.status = QueryStatus.FAILED
+            else:
+                state.query.status = QueryStatus.NEEDS_REVIEW
             
         state.messages.append(AIMessage(content=message))
         return state
 
 
+    def _should_continue(self, state: AgentState) -> bool:
+        return state.query.status != QueryStatus.COMPLETE and state.query.status != QueryStatus.FAILED
+
+
     def _build_graph(self) -> StateGraph:
         workflow = StateGraph(AgentState)
-        
-        # Add nodes
+
         workflow.add_node("generate", self._generate)
         workflow.add_node("review", self._review)
         workflow.add_node("correct", self._correct)
         workflow.add_node("execute", self._execute)
-        
-        # Add edges
-        workflow.add_conditional_edges("", self._route, {
-            "generate": "generate",
-            "review": "review",
-            "correct": "correct",
-            "execute": "execute",
-            "end": None
-        })
+
+        workflow.add_edge("generate", "review")
+        workflow.add_conditional_edges(
+            "review",
+            lambda x: "correct" if x.query.status == QueryStatus.NEEDS_CORRECTION else "execute",
+            {"correct": "correct", "execute": "execute"}
+        )
+        workflow.add_edge("correct", "execute")
+
+        workflow.add_conditional_edges(
+            "execute",
+            lambda x: "review" if x.query.status == QueryStatus.NEEDS_REVIEW else "END",
+            {"review": "review", "END": END}
+        )
         workflow.set_entry_point("generate")
-        
+
         return workflow.compile()
 
 
@@ -141,13 +159,14 @@ class SQLAgent:
             messages=[HumanMessage(content=user_request)],
             query=SQLQuery(text="", status=QueryStatus.PENDING)
         )
-        
         final_state = self.graph.invoke(initial_state)
 
-        final_state.df.to_csv('test.csv', index=False)
-        
-        # Return both the DataFrame and messages
-        return final_state.df, final_state.messages
+        if hasattr(final_state, 'df'):
+            final_state.df.to_csv('test.csv', index=False)
+            return final_state.df, final_state.messages
+
+        else:
+            return pd.DataFrame(), final_state.messages
 
 
 if __name__ == "__main__":
@@ -159,5 +178,5 @@ if __name__ == "__main__":
         db_path=path_db,
         llm=llm,
     )
-    result = agent.run("How many units each employee has sold?")
+    df, result = agent.run("How many items each customer has bought?")
     print(result)

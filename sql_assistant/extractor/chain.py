@@ -12,19 +12,19 @@ class SQLChains:
     def _init_chains(self):
         # Generation Chain
         generation_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a SQL expert. Generate a SQL query based on the user's request."),
+            ("system", "You are a SQL expert. You know everything about SQL and its operations. Don't give explanations, return only the SQL query."),
             ("user", """Database Schema:
             {schema}
             
             User Request: {request}
             
-            Generate a SQL query to fulfill this request.""")
+            Generate only a SQL query to fulfill this request.""")
         ])
         self.generate = generation_prompt | self.llm | self.output_parser
         
         # Review Chain
         review_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a SQL expert. Review the query for correctness."),
+            ("system", "You are a SQL expert. Review the query for correctness. Be succinct"),
             ("user", """Review this SQL query:
             {query}
             
@@ -37,11 +37,11 @@ class SQLChains:
         
         # Correction Chain
         correction_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a SQL expert. Correct the query based on the feedback."),
+            ("system", "You are a SQL expert. The following query seems to be wrong. Make any corrections based on the feedback given. Return only the query to the user."),
             ("user", """Query: {query}
             Feedback: {feedback}
             Schema: {schema}
-            
-            Provide the corrected query only.""")
+
+            Provide only the corrected query.""")
         ])
         self.correct = correction_prompt | self.llm | self.output_parser
