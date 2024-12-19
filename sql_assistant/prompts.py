@@ -1,5 +1,4 @@
-chat = "meta-llama/Llama-3.1-8B-Instruct"
-coder = "Qwen/Qwen2.5-1.5B-Instruct"
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
 
 query_check_system = """You are a SQL expert with a strong attention to detail.
 Double check the SQLite query for common mistakes, including:
@@ -37,3 +36,48 @@ just say you don't have enough information.
 If you have enough information to answer the input question, simply invoke the
 appropriate tool to submit the final answer to the user.
 DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database."""
+
+extract_query_gen_template = PromptTemplate(
+    input_variables=["schema", "request"],
+    template="""
+    You are a data analyst AI assistant. Generate an SQL query to extract data based on the
+    user's request.
+    Database Schema:
+    {schema}
+
+    User request: {request}
+
+    Generate only the SQL query without any explanations. The query should start with
+    'SELECT' and end with a semicolon.
+    """
+)
+
+review_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a SQL expert who reviews queries for correctness and provides detailed feedback."),
+    ("user", """Review the following SQL query for correctness and potential issues:
+    
+    Query: {sql_query}
+    
+    Database Schema:
+    {schema}
+    
+    Provide detailed feedback about:
+    1. Syntax correctness
+    2. Table and column name validity
+    3. Query logic and potential improvements
+    
+    Start your response with either 'CORRECT' or 'INCORRECT' followed by your detailed feedback.""")
+])
+
+correction_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a SQL expert who corrects queries based on review feedback."),
+    ("user", """Original query: {original_query}
+    
+    Review feedback: {feedback}
+    
+    Database schema:
+    {schema}
+    
+    Please provide a corrected SQL query addressing all the issues mentioned in the feedback.
+    Return only the corrected SQL query without any additional explanation.""")
+])

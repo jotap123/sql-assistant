@@ -1,5 +1,3 @@
-import os
-
 from typing import Literal
 from langchain_core.tools import tool
 from langchain_core.prompts import ChatPromptTemplate
@@ -8,20 +6,20 @@ from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
 from langgraph.graph import END, StateGraph, START
 
-from sql_assistant.llm.QA.utils import (
+from sql_assistant.config import chat, coder, path_db
+from sql_assistant.utils import (
     State,
     SubmitFinalAnswer,
     create_tool_node_with_fallback,
     load_llm_chat,
 )
-from sql_assistant.llm.QA.constants import chat, coder, query_check_system, query_gen_system
+from sql_assistant.prompts import query_check_system, query_gen_system
 
 
 class SQLAssistant:
-    path_db = os.getcwd() + '/chinook.db'
-    db = SQLDatabase.from_uri(f"sqlite:///{path_db}")
     chat_llm = load_llm_chat(chat)
     coder_llm = load_llm_chat(coder)
+    db = SQLDatabase.from_uri(f"sqlite:///{path_db}")
 
 
     @tool
@@ -47,9 +45,7 @@ class SQLAssistant:
         query_check_prompt = ChatPromptTemplate.from_messages(
             [("system", query_check_system), ("placeholder", "{messages}")]
         )
-        self.query_check = query_check_prompt | self.coder_llm.bind_tools(
-            [self.db_query_tool]
-        )
+        self.query_check = query_check_prompt | self.coder_llm.bind_tools([self.db_query_tool])
 
 
     # Add a node for the first tool call
@@ -157,4 +153,4 @@ class SQLAssistant:
         workflow.add_edge("execute_query", "query_gen")
 
         # Compile the workflow into a runnable
-        self.app = workflow.compile()
+        self.ai = workflow.compile()

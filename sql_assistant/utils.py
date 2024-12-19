@@ -2,6 +2,7 @@ from typing import Annotated, Any
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
 from langgraph.prebuilt import ToolNode
+from langgraph.graph import MessagesState
 from langgraph.graph.message import AnyMessage, add_messages
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableLambda, RunnableWithFallbacks
@@ -20,16 +21,16 @@ class SubmitFinalAnswer(BaseModel):
 
 
 def load_llm_chat(model):
-        llm = HuggingFaceEndpoint(
-            repo_id=model,
-            task="text-generation",
-            temperature=0.1,
-            max_new_tokens=1024,
-            return_full_text=False,
-        )
-        chat = ChatHuggingFace(llm=llm)
+    llm = HuggingFaceEndpoint(
+        repo_id=model,
+        task="text-generation",
+        temperature=0.1,
+        max_new_tokens=1024,
+        return_full_text=False,
+    )
+    chat = ChatHuggingFace(llm=llm)
 
-        return chat
+    return chat
 
 
 def create_tool_node_with_fallback(tools: list) -> RunnableWithFallbacks[Any, dict]:

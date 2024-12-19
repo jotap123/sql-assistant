@@ -47,19 +47,3 @@ class AgentLog:
         color_code = self.BG_BLACK + self.color
         message = f"[{self.name}] {message}"
         logging.info(color_code + message + self.RESET)
-    
-    def warn(self, message):
-        """
-        Log this as an info message, identifying the agent
-        """
-        color_code = self.BG_BLACK + self.YELLOW
-        message = f"[{self.name}] {message}"
-        logging.info(color_code + message + self.RESET)
-    
-    def error(self, message):
-        """
-        Log this as an info message, identifying the agent
-        """
-        color_code = self.BG_BLACK + self.RED
-        message = f"[{self.name}] {message}"
-        logging.info(color_code + message + self.RESET)
