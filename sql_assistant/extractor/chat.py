@@ -1,7 +1,6 @@
 import pandas as pd
 
 from pathlib import Path
-from dataclasses import dataclass
 from typing_extensions import TypedDict
 from typing import List, Optional, Literal, Tuple, Annotated
 from langchain_core.language_models import BaseChatModel
@@ -16,10 +15,8 @@ from sql_assistant.extractor.chain import SQLChains
 from sql_assistant.extractor.SQL import SQLQuery, QueryResult, QueryStatus
 from sql_assistant.config import DOWNLOAD_ENDPOINT, chat, coder
 from sql_assistant.utils import load_llm_chat
-from sql_assistant.extractor.download_file import Config
 
 
-@dataclass
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     query: SQLQuery
@@ -54,8 +51,9 @@ class SQLAgent:
             You can download your results at: {DOWNLOAD_ENDPOINT}
 
             Please format a response that includes:
-            1. A note that the link will be available for download
-            2. The download link for the results
+            1. Information if the query execution was successful or not.
+            2. Information on row count and columns contained
+            3. The download link for the results
 
             Please format a response informing the user about the results and how to download them.""")
         ])
@@ -133,7 +131,7 @@ class SQLAgent:
         if not state.result.empty:
             print("SUCCESS")
             state.query.status = QueryStatus.COMPLETE
-            result.to_csv(Config.get_results_path(), index=False)
+            result.to_csv(DOWNLOAD_ENDPOINT, index=False)
             
             # Format output message with download info
             output_message = self.format_output.invoke({
@@ -157,18 +155,18 @@ class SQLAgent:
 
     def _format_output(self, state: AgentState) -> AgentState:
         """Format the final output message with download link."""
-        if state.query.status == QueryStatus.COMPLETE and hasattr(state, 'result'):
-            output_message = self.create_output_chain().invoke({
+        if state.query.status == QueryStatus.COMPLETE and state.result is not None:
+            output_message = self.create_output_chain(self.llm_chat).invoke({
                 "row_count": len(state.result),
                 "columns": ", ".join(state.result.columns),
                 "download_link": DOWNLOAD_ENDPOINT
             })
             state.messages.append(AIMessage(content=output_message))
+
+        elif state.query.status == QueryStatus.FAILED:
+            state.messages.append(AIMessage(content="Query execution failed. Please check if your query makes sense or try to reformulate it."))
+
         return state
-
-
-    def _should_continue(self, state: AgentState) -> bool:
-        return state.query.status != QueryStatus.COMPLETE and state.query.status != QueryStatus.FAILED
 
 
     def _build_graph(self) -> StateGraph:
@@ -199,7 +197,7 @@ class SQLAgent:
         return workflow.compile()
 
 
-    def run(self, user_request: str) -> Tuple[pd.DataFrame, List[BaseMessage]]:
+    def run(self, user_request: str) -> List[BaseMessage]:
         """
         Execute a SQL query based on the user request and return messages.
         Results will be available via the download endpoint.
@@ -208,14 +206,15 @@ class SQLAgent:
             messages=[HumanMessage(content=user_request)],
             query=SQLQuery(text="", status=QueryStatus.PENDING)
         )
-        
+        print(initial_state.messages)
+
         final_state = self.graph.invoke(initial_state)
-        return final_state.messages
+        return final_state['messages']
 
 
 if __name__ == "__main__":
     from sql_assistant.config import path_db
 
     agent = SQLAgent(db_path=path_db)
-    df, result = agent.run("How many items each customer has bought?")
+    result = agent.run("How many items each customer has bought?")
     print(result)

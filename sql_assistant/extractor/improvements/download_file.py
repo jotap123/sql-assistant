@@ -8,7 +8,7 @@ from sql_assistant.config import DOWNLOAD_ENDPOINT
 
 
 class Config:
-    RESULTS_DIR = Path("query_results")
+    RESULTS_DIR = Path("query-results")
     
     @classmethod
     def ensure_results_dir(cls):

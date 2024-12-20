@@ -8,7 +8,7 @@ load_dotenv()
 chat = "microsoft/Phi-3.5-mini-instruct"
 coder = "microsoft/Phi-3-mini-4k-instruct"
 
-DOWNLOAD_ENDPOINT = "/data/query-results"
+DOWNLOAD_ENDPOINT = "/data/query-results/query_results.csv"
 
 
 def get_root_dir():

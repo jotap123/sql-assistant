@@ -1,0 +1,1 @@
+streamlit run sql_assistant/extractor/serving.py
