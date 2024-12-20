@@ -31,12 +31,7 @@ class DatabaseConnection:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 df = pd.read_sql_query(query, conn)
-                return QueryResult(
-                    success=True,
-                    data=df
-                )
+                return df
         except Exception as e:
-            return QueryResult(
-                success=False,
-                error=str(e)
-            )
+            print(f"{e}")
+            return pd.DataFrame()

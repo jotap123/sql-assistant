@@ -24,14 +24,14 @@ class SQLChains:
         
         # Review Chain
         review_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a SQL expert. Review the query for correctness. Be succinct"),
+            ("system", "You are a SQL expert. You will review the query for correctness according to the user request."),
             ("user", """Review this SQL query:
             {query}
             
             Schema:
             {schema}
             
-            Start with CORRECT or INCORRECT followed by detailed feedback.""")
+            Start with CORRECT or INCORRECT followed by a brief feedback.""")
         ])
         self.review = review_prompt | self.llm | self.output_parser
         
@@ -45,3 +45,4 @@ class SQLChains:
             Provide only the corrected query.""")
         ])
         self.correct = correction_prompt | self.llm | self.output_parser
+        

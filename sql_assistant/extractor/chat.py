@@ -2,19 +2,26 @@ import pandas as pd
 
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, Literal, Tuple
+from typing_extensions import TypedDict
+from typing import List, Optional, Literal, Tuple, Annotated
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import AIMessage, HumanMessage, BaseMessage, AnyMessage
 from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
 
 from sql_assistant.extractor.database import DatabaseConnection
 from sql_assistant.extractor.chain import SQLChains
 from sql_assistant.extractor.SQL import SQLQuery, QueryResult, QueryStatus
+from sql_assistant.config import DOWNLOAD_ENDPOINT, chat, coder
+from sql_assistant.utils import load_llm_chat
+from sql_assistant.extractor.download_file import Config
 
 
 @dataclass
-class AgentState:
-    messages: List[BaseMessage]
+class AgentState(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
     query: SQLQuery
     result: Optional[QueryResult] = None
 
@@ -23,14 +30,37 @@ class SQLAgent:
     def __init__(
         self,
         db_path: Path,
-        llm: BaseChatModel,
         max_retries: int = 1
     ):
+        self.llm_chat = load_llm_chat(chat)
+        self.llm_coder = load_llm_chat(coder)
         self.db = DatabaseConnection(db_path)
-        self.chains = SQLChains(llm)
+        self.chains = SQLChains(self.llm_coder)
         self.max_retries = max_retries
         self.graph = self._build_graph()
-    
+        
+        self.graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
+
+
+    def create_output_chain(self, llm: BaseChatModel) -> ChatPromptTemplate:
+        output_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a helpful assistant.
+             You shall assist the user in any topics related to extracting data from your database,
+             if the response is a succes include the download link for the file."""),
+            ("user", """Query results are ready with the following details:
+            - Row count: {{row_count}}
+            - Columns: {{columns}}
+
+            You can download your results at: {DOWNLOAD_ENDPOINT}
+
+            Please format a response that includes:
+            1. A note that the link will be available for download
+            2. The download link for the results
+
+            Please format a response informing the user about the results and how to download them.""")
+        ])
+        return output_prompt | llm | StrOutputParser()
+
 
     def _route(self, state: AgentState) -> Literal["generate", "review", "correct", "execute", "end"]:
         match state.query.status:
@@ -52,8 +82,8 @@ class SQLAgent:
         query_text = self.chains.generate.invoke({
             "schema": self.db.get_schema(),
             "request": state.messages[-1].content
-        })
-        
+        }).strip("```").strip("sql\n")
+
         state.query = SQLQuery(
             text=query_text,
             status=QueryStatus.NEEDS_REVIEW
@@ -67,15 +97,15 @@ class SQLAgent:
             "query": state.query.text,
             "schema": self.db.get_schema()
         })
-        
+
         state.query.feedback = feedback
         state.messages.append(AIMessage(content=f"Review Feedback: {feedback}"))
-        
+
         if "INCORRECT" in feedback.upper():
             state.query.status = QueryStatus.NEEDS_CORRECTION
         else:
             state.query.status = QueryStatus.READY
-            
+
         return state
 
 
@@ -92,7 +122,6 @@ class SQLAgent:
         
         state.query.text = corrected_query
         state.query.status = QueryStatus.READY
-        state.query.retry_count += 1
         state.messages.append(AIMessage(content=f"Corrected SQL Query: {corrected_query}"))
         return state
 
@@ -101,26 +130,40 @@ class SQLAgent:
         result = self.db.execute_query(state.query.text)
         state.result = result
 
-        print(state.query)
-        print(result.success)
-        
-        if result.success and result.data is not None:
+        if not state.result.empty:
             print("SUCCESS")
             state.query.status = QueryStatus.COMPLETE
-            state.df = result.data  # Store the DataFrame in state
-
-            message = (
-                f"Query executed successfully. Found {len(result.data)} rows.\n\n"
-            )
+            result.to_csv(Config.get_results_path(), index=False)
+            
+            # Format output message with download info
+            output_message = self.format_output.invoke({
+                "row_count": len(result),
+                "columns": ", ".join(result.columns)
+            })
+            
+            state.messages.append(AIMessage(content=output_message))
         else:
             print("FAIL")
-            message = f"Error executing query: {result.error}"
+            state.query.retry_count += 1
+            message = f"Error executing query: Check Langsmith"
+            state.messages.append(AIMessage(content=message))
             if state.query.retry_count >= self.max_retries:
                 state.query.status = QueryStatus.FAILED
             else:
                 state.query.status = QueryStatus.NEEDS_REVIEW
-            
-        state.messages.append(AIMessage(content=message))
+        
+        return state
+    
+
+    def _format_output(self, state: AgentState) -> AgentState:
+        """Format the final output message with download link."""
+        if state.query.status == QueryStatus.COMPLETE and hasattr(state, 'result'):
+            output_message = self.create_output_chain().invoke({
+                "row_count": len(state.result),
+                "columns": ", ".join(state.result.columns),
+                "download_link": DOWNLOAD_ENDPOINT
+            })
+            state.messages.append(AIMessage(content=output_message))
         return state
 
 
@@ -135,6 +178,7 @@ class SQLAgent:
         workflow.add_node("review", self._review)
         workflow.add_node("correct", self._correct)
         workflow.add_node("execute", self._execute)
+        workflow.add_node("format_output", self._format_output)
 
         workflow.add_edge("generate", "review")
         workflow.add_conditional_edges(
@@ -146,37 +190,32 @@ class SQLAgent:
 
         workflow.add_conditional_edges(
             "execute",
-            lambda x: "review" if x.query.status == QueryStatus.NEEDS_REVIEW else "END",
-            {"review": "review", "END": END}
+            lambda x: "review" if x.query.status == QueryStatus.NEEDS_REVIEW else "format_output",
+            {"review": "review", "format_output": "format_output"}
         )
+        workflow.add_edge("format_output", END)
         workflow.set_entry_point("generate")
 
         return workflow.compile()
 
 
     def run(self, user_request: str) -> Tuple[pd.DataFrame, List[BaseMessage]]:
+        """
+        Execute a SQL query based on the user request and return messages.
+        Results will be available via the download endpoint.
+        """
         initial_state = AgentState(
             messages=[HumanMessage(content=user_request)],
             query=SQLQuery(text="", status=QueryStatus.PENDING)
         )
+        
         final_state = self.graph.invoke(initial_state)
-
-        if hasattr(final_state, 'df'):
-            final_state.df.to_csv('test.csv', index=False)
-            return final_state.df, final_state.messages
-
-        else:
-            return pd.DataFrame(), final_state.messages
+        return final_state.messages
 
 
 if __name__ == "__main__":
-    from sql_assistant.config import path_db, chat
-    from sql_assistant.utils import load_llm_chat
+    from sql_assistant.config import path_db
 
-    llm = load_llm_chat(chat)
-    agent = SQLAgent(
-        db_path=path_db,
-        llm=llm,
-    )
+    agent = SQLAgent(db_path=path_db)
     df, result = agent.run("How many items each customer has bought?")
     print(result)
