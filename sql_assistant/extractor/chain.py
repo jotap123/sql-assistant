@@ -12,26 +12,33 @@ class SQLChains:
     def _init_chains(self):
         # Generation Chain
         generation_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a SQL expert. You know everything about SQL and its operations. Don't give explanations, return only the SQL query."),
+            ("system", """You are a SQL expert. You know everything about SQL and its operations.
+             Don't give explanations, return only the SQL query.
+             DO NOT generate a query if the request is invalid, empty or you don't understand it.
+             If that is the case you should return the text 'invalid request'"""),
             ("user", """Database Schema:
             {schema}
-            
+
             User Request: {request}
-            
-            Generate only a SQL query to fulfill this request.""")
+
+            If the request is valid generate a SQL query to fulfill this request.""")
         ])
         self.generate = generation_prompt | self.llm | self.output_parser
-        
+
         # Review Chain
         review_prompt = ChatPromptTemplate.from_messages([
-            ("system", "You are a SQL expert. You will review the query for correctness according to the user request."),
+            ("system", """You are a SQL expert.
+             You will review the query for correctness according to the user request.
+             DO NOT try to fix the request if a query isn't provided.
+             If a query isn't provided mark it as INVALID.
+             """),
             ("user", """Review this SQL query:
             {query}
-            
+
             Schema:
             {schema}
-            
-            Start with CORRECT or INCORRECT followed by a brief feedback.""")
+
+            Start with CORRECT, INCORRECT or INVALID followed by a brief feedback.""")
         ])
         self.review = review_prompt | self.llm | self.output_parser
         

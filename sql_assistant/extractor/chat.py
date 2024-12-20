@@ -1,8 +1,8 @@
-import pandas as pd
+import os
 
 from pathlib import Path
 from typing_extensions import TypedDict
-from typing import List, Optional, Literal, Tuple, Annotated
+from typing import List, Optional, Annotated
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
@@ -13,7 +13,7 @@ from langgraph.graph.message import add_messages
 from sql_assistant.extractor.database import DatabaseConnection
 from sql_assistant.extractor.chain import SQLChains
 from sql_assistant.extractor.SQL import SQLQuery, QueryResult, QueryStatus
-from sql_assistant.config import DOWNLOAD_ENDPOINT, chat, coder
+from sql_assistant.config import FILEPATH, chat, coder
 from sql_assistant.utils import load_llm_chat
 
 
@@ -39,16 +39,95 @@ class SQLAgent:
         self.graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
 
 
+    def _generate(self, state: AgentState) -> AgentState:
+        query_text = self.chains.generate.invoke({
+            "schema": self.db.get_schema(),
+            "request": state['messages'][-1].content
+        }).strip("```").strip("sql\n")
+
+        state['query'] = SQLQuery(
+            text=query_text,
+            status=QueryStatus.NEEDS_REVIEW
+        )
+        state['messages'].append(AIMessage(content=f"Generated SQL Query: {query_text}"))
+        return state
+
+
+    def _review(self, state: AgentState) -> AgentState:
+        feedback = self.chains.review.invoke({
+            "query": state["query"].text,
+            "schema": self.db.get_schema()
+        })
+
+        state['query'].feedback = feedback
+        state['messages'].append(AIMessage(content=f"Review Feedback: {feedback}"))
+
+        if "INCORRECT" in feedback.upper():
+            state['query'].status = QueryStatus.NEEDS_CORRECTION
+        if "INVALID" in feedback.upper():
+            state['query'].status = QueryStatus.FAILED
+        else:
+            state['query'].status = QueryStatus.READY
+
+        return state
+
+
+    def _correct(self, state: AgentState) -> AgentState:
+        if state['query'].retry_count >= self.max_retries:
+            state['query'].status = QueryStatus.FAILED
+            return state
+            
+        corrected_query = self.chains.correct.invoke({
+            "query": state['query'].text,
+            "feedback": state['query'].feedback,
+            "schema": self.db.get_schema()
+        })
+        
+        state['query'].text = corrected_query
+        state['query'].status = QueryStatus.READY
+        state['messages'].append(AIMessage(content=f"Corrected SQL Query: {corrected_query}"))
+        return state
+
+
+    def _execute(self, state: AgentState) -> AgentState:
+        result = self.db.execute_query(state['query'].text)
+        state['result'] = result
+
+        try:
+            os.remove(FILEPATH)
+        except:
+            pass
+
+        if not state['result'].empty:
+            print("SUCCESS")
+            state['query'].status = QueryStatus.COMPLETE
+            os.makedirs(os.path.dirname(FILEPATH), exist_ok=True)
+            result.to_csv(FILEPATH, index=False)
+            state['messages'].append(AIMessage(content=f"Execution successful"))
+        else:
+            print("FAIL")
+            state['query'].retry_count += 1
+            message = f"Error executing query: Check Langsmith"
+            state['messages'].append(AIMessage(content=message))
+            if state['query'].retry_count >= self.max_retries:
+                state['query'].status = QueryStatus.FAILED
+            else:
+                state['query'].status = QueryStatus.NEEDS_REVIEW
+
+        return state
+
+
     def create_output_chain(self, llm: BaseChatModel) -> ChatPromptTemplate:
         output_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a helpful assistant.
-             You shall assist the user in any topics related to extracting data from your database,
-             if the response is a succes include the download link for the file."""),
+             You shall assist the user in any topics related to extracting data from your database.
+             You shall only engage in topics related to the database or to SQL.
+             If the response is a success include the download link for the file."""),
             ("user", """Query results are ready with the following details:
-            - Row count: {{row_count}}
-            - Columns: {{columns}}
+            - Row count: {row_count}
+            - Columns: {columns}
 
-            You can download your results at: {DOWNLOAD_ENDPOINT}
+            You can download your results at: {endpoint}
 
             Please format a response that includes:
             1. Information if the query execution was successful or not.
@@ -60,111 +139,18 @@ class SQLAgent:
         return output_prompt | llm | StrOutputParser()
 
 
-    def _route(self, state: AgentState) -> Literal["generate", "review", "correct", "execute", "end"]:
-        match state.query.status:
-            case QueryStatus.PENDING:
-                return "generate"
-            case QueryStatus.NEEDS_REVIEW:
-                return "review"
-            case QueryStatus.NEEDS_CORRECTION:
-                return "correct"
-            case QueryStatus.READY:
-                return "execute"
-            case QueryStatus.FAILED:
-                return "end"
-            case _:
-                return "end"
-
-
-    def _generate(self, state: AgentState) -> AgentState:
-        query_text = self.chains.generate.invoke({
-            "schema": self.db.get_schema(),
-            "request": state.messages[-1].content
-        }).strip("```").strip("sql\n")
-
-        state.query = SQLQuery(
-            text=query_text,
-            status=QueryStatus.NEEDS_REVIEW
-        )
-        state.messages.append(AIMessage(content=f"Generated SQL Query: {query_text}"))
-        return state
-
-
-    def _review(self, state: AgentState) -> AgentState:
-        feedback = self.chains.review.invoke({
-            "query": state.query.text,
-            "schema": self.db.get_schema()
-        })
-
-        state.query.feedback = feedback
-        state.messages.append(AIMessage(content=f"Review Feedback: {feedback}"))
-
-        if "INCORRECT" in feedback.upper():
-            state.query.status = QueryStatus.NEEDS_CORRECTION
-        else:
-            state.query.status = QueryStatus.READY
-
-        return state
-
-
-    def _correct(self, state: AgentState) -> AgentState:
-        if state.query.retry_count >= self.max_retries:
-            state.query.status = QueryStatus.FAILED
-            return state
-            
-        corrected_query = self.chains.correct.invoke({
-            "query": state.query.text,
-            "feedback": state.query.feedback,
-            "schema": self.db.get_schema()
-        })
-        
-        state.query.text = corrected_query
-        state.query.status = QueryStatus.READY
-        state.messages.append(AIMessage(content=f"Corrected SQL Query: {corrected_query}"))
-        return state
-
-
-    def _execute(self, state: AgentState) -> AgentState:
-        result = self.db.execute_query(state.query.text)
-        state.result = result
-
-        if not state.result.empty:
-            print("SUCCESS")
-            state.query.status = QueryStatus.COMPLETE
-            result.to_csv(DOWNLOAD_ENDPOINT, index=False)
-            
-            # Format output message with download info
-            output_message = self.format_output.invoke({
-                "row_count": len(result),
-                "columns": ", ".join(result.columns)
-            })
-            
-            state.messages.append(AIMessage(content=output_message))
-        else:
-            print("FAIL")
-            state.query.retry_count += 1
-            message = f"Error executing query: Check Langsmith"
-            state.messages.append(AIMessage(content=message))
-            if state.query.retry_count >= self.max_retries:
-                state.query.status = QueryStatus.FAILED
-            else:
-                state.query.status = QueryStatus.NEEDS_REVIEW
-        
-        return state
-    
-
     def _format_output(self, state: AgentState) -> AgentState:
         """Format the final output message with download link."""
-        if state.query.status == QueryStatus.COMPLETE and state.result is not None:
+        if state['query'].status == QueryStatus.COMPLETE and state['result'] is not None:
             output_message = self.create_output_chain(self.llm_chat).invoke({
-                "row_count": len(state.result),
-                "columns": ", ".join(state.result.columns),
-                "download_link": DOWNLOAD_ENDPOINT
+                "row_count": len(state['result']),
+                "columns": ", ".join(state['result'].columns),
+                "endpoint": FILEPATH
             })
-            state.messages.append(AIMessage(content=output_message))
+            state['messages'].append(AIMessage(content=output_message))
 
-        elif state.query.status == QueryStatus.FAILED:
-            state.messages.append(AIMessage(content="Query execution failed. Please check if your query makes sense or try to reformulate it."))
+        elif state['query'].status == QueryStatus.FAILED:
+            state['messages'].append(AIMessage(content="Query execution failed. Please check if your query makes sense or try to reformulate it."))
 
         return state
 
@@ -181,14 +167,14 @@ class SQLAgent:
         workflow.add_edge("generate", "review")
         workflow.add_conditional_edges(
             "review",
-            lambda x: "correct" if x.query.status == QueryStatus.NEEDS_CORRECTION else "execute",
-            {"correct": "correct", "execute": "execute"}
+            lambda x: "correct" if x['query'].status == QueryStatus.NEEDS_CORRECTION else "execute" if x['query'].status == QueryStatus.READY else "END",
+            {"correct": "correct", "execute": "execute", "END": END}
         )
         workflow.add_edge("correct", "execute")
 
         workflow.add_conditional_edges(
             "execute",
-            lambda x: "review" if x.query.status == QueryStatus.NEEDS_REVIEW else "format_output",
+            lambda x: "review" if x['query'].status == QueryStatus.NEEDS_REVIEW else "format_output",
             {"review": "review", "format_output": "format_output"}
         )
         workflow.add_edge("format_output", END)
@@ -206,10 +192,10 @@ class SQLAgent:
             messages=[HumanMessage(content=user_request)],
             query=SQLQuery(text="", status=QueryStatus.PENDING)
         )
-        print(initial_state.messages)
+        print(initial_state['messages'])
 
         final_state = self.graph.invoke(initial_state)
-        return final_state['messages']
+        return final_state['messages'][-1].content
 
 
 if __name__ == "__main__":

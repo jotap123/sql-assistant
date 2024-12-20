@@ -1,5 +1,6 @@
 # Data
-/data/input
+/data/input/
+/data/query-results/
 
 # Mac OS-specific storage files
 .DS_Store

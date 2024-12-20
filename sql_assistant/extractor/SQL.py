@@ -10,6 +10,7 @@ class QueryStatus(Enum):
     NEEDS_REVIEW = "needs_review"
     NEEDS_CORRECTION = "needs_correction"
     READY = "ready"
+    INVALID = "invalid"
     FAILED = "failed"
     COMPLETE = "complete"
 
