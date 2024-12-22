@@ -1,23 +1,45 @@
-from typing import Annotated, Any
+from enum import Enum
+from pathlib import Path
+from dataclasses import dataclass
+from typing import Annotated, Optional, Annotated
 from typing_extensions import TypedDict
-from pydantic import BaseModel, Field
-from langgraph.prebuilt import ToolNode
-from langgraph.graph import MessagesState
+
 from langgraph.graph.message import AnyMessage, add_messages
-from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableLambda, RunnableWithFallbacks
 from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 
+from sql_assistant.extractor.SQL import SQLQuery, QueryResult
 
-class State(TypedDict):
+
+class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
+    query: SQLQuery
+    result: Optional[QueryResult] = None
 
 
-# Describe a tool to represent the end state
-class SubmitFinalAnswer(BaseModel):
-    """Submit the final answer to the user based on the query results."""
+class QueryStatus(Enum):
+    PENDING = "pending"
+    NEEDS_REVIEW = "needs_review"
+    NEEDS_CORRECTION = "needs_correction"
+    READY = "ready"
+    INVALID = "invalid"
+    FAILED = "failed"
+    COMPLETE = "complete"
 
-    final_answer: str = Field(..., description="The final answer to the user")
+
+class AnalysisType(Enum):
+    DESCRIPTIVE = "descriptive"
+    TEMPORAL = "temporal"
+    CORRELATION = "correlation"
+    DISTRIBUTION = "distribution"
+    AGGREGATION = "aggregation"
+
+
+@dataclass
+class AnalysisResult:
+    analysis_type: AnalysisType
+    visualization_type: str
+    description: str
+    viz_path: Optional[Path] = None
 
 
 def load_llm_chat(model):
@@ -31,26 +53,3 @@ def load_llm_chat(model):
     chat = ChatHuggingFace(llm=llm)
 
     return chat
-
-
-def create_tool_node_with_fallback(tools: list) -> RunnableWithFallbacks[Any, dict]:
-    """
-    Create a ToolNode with a fallback to handle errors and surface them to the agent.
-    """
-    return ToolNode(tools).with_fallbacks(
-        [RunnableLambda(handle_tool_error)], exception_key="error"
-    )
-
-
-def handle_tool_error(state) -> dict:
-    error = state.get("error")
-    tool_calls = state["messages"][-1].tool_calls
-    return {
-        "messages": [
-            ToolMessage(
-                content=f"Error: {repr(error)}\n please fix your mistakes.",
-                tool_call_id=tc["id"],
-            )
-            for tc in tool_calls
-        ]
-    }

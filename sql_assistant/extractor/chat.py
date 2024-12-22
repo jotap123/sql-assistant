@@ -1,33 +1,25 @@
 import os
 
+from typing import List
 from pathlib import Path
-from typing_extensions import TypedDict
-from typing import List, Optional, Annotated
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import AIMessage, HumanMessage, BaseMessage, AnyMessage
+from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
 
 from sql_assistant.extractor.database import DatabaseConnection
 from sql_assistant.extractor.chain import SQLChains
-from sql_assistant.extractor.SQL import SQLQuery, QueryResult, QueryStatus
+from sql_assistant.extractor.SQL import SQLQuery
 from sql_assistant.config import FILEPATH, chat, coder
-from sql_assistant.utils import load_llm_chat
-
-
-class AgentState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    query: SQLQuery
-    result: Optional[QueryResult] = None
+from sql_assistant.utils import load_llm_chat, QueryStatus, AgentState
 
 
 class SQLAgent:
     def __init__(
         self,
         db_path: Path,
-        max_retries: int = 1
+        max_retries: int = 2
     ):
         self.llm_chat = load_llm_chat(chat)
         self.llm_coder = load_llm_chat(coder)

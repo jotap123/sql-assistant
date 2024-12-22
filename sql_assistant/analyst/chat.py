@@ -1,178 +1,331 @@
-import openai
+import os
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import sqlite3
-from typing import List, Dict, Any
+import plotly.express as px
+import plotly.graph_objects as go
 
-from sql_assistant.utils import load_llm_chat
+from typing import List
+from pathlib import Path
+from langchain_core.language_models import BaseChatModel
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
+from langgraph.graph import StateGraph, END
 
-class DataAnalystAgent:
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        self.conversation_history = []
+from sql_assistant.extractor.database import DatabaseConnection
+from sql_assistant.extractor.chain import SQLChains
+from sql_assistant.extractor.SQL import SQLQuery
+from sql_assistant.config import FILEPATH, chat, coder
+from sql_assistant.utils import (
+    load_llm_chat,
+    QueryStatus,
+    AgentState,
+    AnalysisResult,
+    AnalysisType,
+)
 
-    def _execute_query(self, query: str) -> pd.DataFrame:
-        with sqlite3.connect(self.db_path) as conn:
-            return pd.read_sql_query(query, conn)
 
-    def _get_database_schema(self) -> str:
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            
-            # Get all table names
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = cursor.fetchall()
-            
-            schema = ""
-            for table in tables:
-                table_name = table[0]
-                cursor.execute(f"PRAGMA table_info({table_name})")
-                columns = cursor.fetchall()
-                schema += f"Table: {table_name}\n"
-                schema += "\n".join([f"- {col[1]} {col[2]}" for col in columns])
-                schema += "\n\n"
-        return schema
-
-    def analyze_data(self, query: str) -> str:
-        # Add the user's query to the conversation history
-        self.conversation_history.append({"role": "user", "content": query})
-
-        # Fetch data summary for all tables
-        schema = self._get_database_schema()
-
-        # Construct the prompt
-        prompt = f"""
-        You are a data analyst AI assistant. Analyze the following database schema and answer the user's query.
-
-        Database Schema:
-        {schema}
-
-        User query: {query}
-
-        Provide a detailed analysis based on the database schema and the user's query.
-        """
-
-        # Get the response from the LLM
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=self.conversation_history + [{"role": "user", "content": prompt}]
-        )
-
-        analysis = response.choices[0].message.content
-
-        # Add the AI's response to the conversation history
-        self.conversation_history.append({"role": "assistant", "content": analysis})
-
-        return analysis
-
-    def visualize_data(self, visualization_type: str, x_column: str, y_column: str, table_name: str = None) -> None:
-        if table_name is None:
-            # If table_name is not provided, try to infer it from the column names
-            schema = self._get_database_schema()
-            tables = [line.split(":")[1].strip() for line in schema.split("\n") if line.startswith("Table:")]
-            for table in tables:
-                if x_column in schema and y_column in schema:
-                    table_name = table
-                    break
-            if table_name is None:
-                raise ValueError("Could not infer table name. Please provide it explicitly.")
-
-        data = self._execute_query(f"SELECT {x_column}, {y_column} FROM {table_name}")
-
-        plt.figure(figsize=(10, 6))
-
-        if visualization_type == "scatter":
-            sns.scatterplot(data=data, x=x_column, y=y_column)
-        elif visualization_type == "line":
-            sns.lineplot(data=data, x=x_column, y=y_column)
-        elif visualization_type == "bar":
-            sns.barplot(data=data, x=x_column, y=y_column)
-        else:
-            raise ValueError("Unsupported visualization type")
-
-        plt.title(f"{visualization_type.capitalize()} plot of {y_column} vs {x_column}")
-        plt.xlabel(x_column)
-        plt.ylabel(y_column)
-        plt.show()
-
-    def get_recommendations(self) -> List[str]:
-        schema = self._get_database_schema()
-
-        prompt = f"""
-        You are a data analyst AI assistant. Based on the following database schema,
-        provide a list of 5 recommendations for analysis or insights that might be valuable.
-
-        Database Schema:
-        {schema}
-
-        Provide 5 recommendations, each on a new line starting with a dash (-).
-        """
-
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        recommendations = response.choices[0].message.content.split("\n")
-        return [rec.strip("- ") for rec in recommendations if rec.strip().startswith("-")]
-
-    def extract_data(self, user_request: str) -> pd.DataFrame:
-        schema = self._get_database_schema()
-
-        prompt = f"""
-        You are a data analyst AI assistant. Generate an SQL query to extract data based on the user's request.
+class DataAnalyst:
+    def __init__(
+        self,
+        db_path: Path,
+        max_retries: int = 2
+    ):
+        self.llm_chat = load_llm_chat(chat)
+        self.llm_coder = load_llm_chat(coder)
+        self.db = DatabaseConnection(db_path)
+        self.chains = SQLChains(self.llm_coder)
+        self.max_retries = max_retries
+        self.graph = self._build_graph()
         
-        Database Schema:
-        {schema}
+        self.graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
 
-        User request: {user_request}
 
-        Generate only the SQL query without any explanations. The query should start with 'SELECT' and end with a semicolon.
-        """
+    def _generate(self, state: AgentState) -> AgentState:
+        query_text = self.chains.generate.invoke({
+            "schema": self.db.get_schema(),
+            "request": state['messages'][-1].content
+        }).strip("```").strip("sql\n")
 
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
+        state['query'] = SQLQuery(
+            text=query_text,
+            status=QueryStatus.NEEDS_REVIEW
         )
+        state['messages'].append(AIMessage(content=f"Generated SQL Query: {query_text}"))
+        return state
 
-        generated_query = response.choices[0].message.content.strip()
 
-        # Execute the generated query and return the results
+    def _review(self, state: AgentState) -> AgentState:
+        feedback = self.chains.review.invoke({
+            "query": state["query"].text,
+            "schema": self.db.get_schema()
+        })
+
+        state['query'].feedback = feedback
+        state['messages'].append(AIMessage(content=f"Review Feedback: {feedback}"))
+
+        if "INCORRECT" in feedback.upper():
+            state['query'].status = QueryStatus.NEEDS_CORRECTION
+        if "INVALID" in feedback.upper():
+            state['query'].status = QueryStatus.FAILED
+        else:
+            state['query'].status = QueryStatus.READY
+
+        return state
+
+
+    def _correct(self, state: AgentState) -> AgentState:
+        if state['query'].retry_count >= self.max_retries:
+            state['query'].status = QueryStatus.FAILED
+            return state
+            
+        corrected_query = self.chains.correct.invoke({
+            "query": state['query'].text,
+            "feedback": state['query'].feedback,
+            "schema": self.db.get_schema()
+        })
+        
+        state['query'].text = corrected_query
+        state['query'].status = QueryStatus.READY
+        state['messages'].append(AIMessage(content=f"Corrected SQL Query: {corrected_query}"))
+        return state
+
+
+    def _execute(self, state: AgentState) -> AgentState:
+        result = self.db.execute_query(state['query'].text)
+        state['result'] = result
+
         try:
-            result = self._execute_query(generated_query)
-            print(f"Executed query: {generated_query}")
-            return result
-        except Exception as e:
-            print(f"Error executing query: {e}")
-            return pd.DataFrame()
+            os.remove(FILEPATH)
+        except:
+            pass
 
-# Example usage
+        if not state['result'].empty:
+            print("SUCCESS")
+            state['query'].status = QueryStatus.COMPLETE
+            os.makedirs(os.path.dirname(FILEPATH), exist_ok=True)
+            result.to_csv(FILEPATH, index=False)
+            state['messages'].append(AIMessage(content=f"Execution successful"))
+        else:
+            print("FAIL")
+            state['query'].retry_count += 1
+            message = f"Error executing query: Check Langsmith"
+            state['messages'].append(AIMessage(content=message))
+            if state['query'].retry_count >= self.max_retries:
+                state['query'].status = QueryStatus.FAILED
+            else:
+                state['query'].status = QueryStatus.NEEDS_REVIEW
+
+        return state
+
+
+    def _create_visualization(
+        self,
+        df: pd.DataFrame,
+        analysis_type: AnalysisType,
+        viz_type: str
+    ) -> Dict[str, Any]:
+        """Create visualization using Plotly."""
+        if analysis_type == AnalysisType.TEMPORAL:
+            fig = px.line(df, x=df.columns[0], y=df.columns[1:])
+            
+        elif analysis_type == AnalysisType.CORRELATION:
+            if viz_type == 'heatmap':
+                corr = df.corr()
+                fig = px.imshow(corr, 
+                              labels=dict(color="Correlation"),
+                              x=corr.columns,
+                              y=corr.columns)
+            else:
+                fig = px.scatter_matrix(df)
+                
+        elif analysis_type == AnalysisType.DISTRIBUTION:
+            if viz_type == 'histogram':
+                fig = px.histogram(df, x=df.columns[0])
+            else:
+                fig = px.box(df, y=df.columns[0])
+                
+        elif analysis_type == AnalysisType.AGGREGATION:
+            fig = px.bar(df, x=df.columns[0], y=df.columns[1])
+            
+        else:  # DESCRIPTIVE
+            if df.select_dtypes(include=['number']).shape[1] > 0:
+                numeric_col = df.select_dtypes(include=['number']).columns[0]
+                fig = px.box(df, y=numeric_col)
+            else:
+                fig = px.bar(df.iloc[:, 0].value_counts())
+        
+        # Update layout for better presentation
+        fig.update_layout(
+            template='plotly_white',
+            title={
+                'text': f"{analysis_type.value.title()} Analysis",
+                'y':0.95,
+                'x':0.5,
+                'xanchor': 'center',
+                'yanchor': 'top'
+            },
+            margin=dict(t=100, l=50, r=50, b=50)
+        )
+        
+        return fig
+
+
+    def _analyze_data(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Determine and perform appropriate analysis on the data."""
+        # Get analysis recommendation
+        sample = df.head(5).to_dict()
+        analysis_plan = self.analysis_chain.invoke({
+            "columns": ", ".join(df.columns),
+            "sample": str(sample)
+        })
+        
+        # Parse recommendation
+        plan_parts = {}
+        for line in analysis_plan.split('\n'):
+            if ':' in line:
+                key, value = line.split(':', 1)
+                plan_parts[key.strip()] = value.strip()
+                
+        analysis_type = AnalysisType(plan_parts.get('ANALYSIS_TYPE', 'descriptive').lower())
+        viz_type = plan_parts.get('VISUALIZATION', 'bar').lower()
+        description = plan_parts.get('DESCRIPTION', '')
+        
+        # Create visualization data
+        fig = self._create_visualization(df, analysis_type, viz_type)
+        
+        return fig
+
+
+    def _analyze(self, state: AgentState) -> AgentState:
+        """Perform analysis on the query results."""
+        if state['result'] is not None and not state['result'].empty:
+            analysis_result = self._analyze_data(state['result'])
+            state['analysis'] = analysis_result
+            state['messages'].append(AIMessage(content=f"Analysis complete: {analysis_result.description}"))
+        else:
+            state['messages'].append(AIMessage(content="No data available for analysis."))
+        return state
+
+
+    def _format_analysis(self, state: AgentState) -> AgentState:
+        """Format the analysis results with embedded visualization."""
+        if 'analysis' in state and state['analysis'] is not None:
+            analysis = state['analysis']
+            
+            # Convert the Plotly figure to HTML
+            html_content = f"""
+            <html>
+                <head>
+                    <title>Analysis Results</title>
+                    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.24.3/plotly.min.js"></script>
+                    <style>
+                        body {{
+                            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+                            margin: 0;
+                            padding: 20px;
+                            background-color: #f5f5f5;
+                        }}
+                        .container {{
+                            max-width: 1200px;
+                            margin: 0 auto;
+                            background-color: white;
+                            padding: 20px;
+                            border-radius: 8px;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                        }}
+                        .header {{
+                            margin-bottom: 20px;
+                        }}
+                        .plot {{
+                            width: 100%;
+                            height: 600px;
+                            margin: 20px 0;
+                        }}
+                        .metadata {{
+                            margin-top: 20px;
+                            padding: 15px;
+                            background-color: #f8f9fa;
+                            border-radius: 4px;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header">
+                            <h1>Analysis Results</h1>
+                            <p><strong>Analysis Type:</strong> {analysis.analysis_type.value}</p>
+                            <p><strong>Description:</strong> {analysis.description}</p>
+                        </div>
+                        <div id="plot" class="plot"></div>
+                        <div class="metadata">
+                            <h3>Data Summary</h3>
+                            <p>Rows: {state['result'].shape[0]}</p>
+                            <p>Columns: {state['result'].shape[1]}</p>
+                            <p>Analyzed columns: {', '.join(state['result'].columns)}</p>
+                        </div>
+                    </div>
+                    <script>
+                        {analysis.fig.to_json()}
+                    </script>
+                </body>
+            </html>
+            """
+            
+            state['messages'].append(AIMessage(content=html_content))
+        else:
+            state['messages'].append(AIMessage(content="Analysis could not be completed."))
+        return state
+
+
+    def _build_graph(self) -> StateGraph:
+        workflow = StateGraph(AgentState)
+
+        workflow.add_node("generate", self._generate)
+        workflow.add_node("review", self._review)
+        workflow.add_node("correct", self._correct)
+        workflow.add_node("execute", self._execute)
+        workflow.add_node("analyze", self._analyze)
+        workflow.add_node("format_analysis", self._format_analysis)
+
+        workflow.add_edge("generate", "review")
+        workflow.add_conditional_edges(
+            "review",
+            lambda x: "correct" if x['query'].status == QueryStatus.NEEDS_CORRECTION else "execute" if x['query'].status == QueryStatus.READY else "END",
+            {"correct": "correct", "execute": "execute", "END": END}
+        )
+        workflow.add_edge("correct", "execute")
+
+        workflow.add_conditional_edges(
+            "execute",
+            lambda x: "review" if x['query'].status == QueryStatus.NEEDS_REVIEW 
+                     else "analyze",
+            {"review": "review", "analyze": "analyze"}
+        )
+        workflow.add_edge("analyze", "format_analysis")
+        workflow.add_edge("format_analysis", END)
+        workflow.set_entry_point("generate")
+
+        return workflow.compile()
+
+
+    def run(self, user_request: str) -> List[BaseMessage]:
+        """
+        Execute a SQL query based on the user request and return messages.
+        Results will be available via the download endpoint.
+        """
+        initial_state = AgentState(
+            messages=[HumanMessage(content=user_request)],
+            query=SQLQuery(text="", status=QueryStatus.PENDING)
+        )
+        print(initial_state['messages'])
+
+        final_state = self.graph.invoke(initial_state)
+        return final_state['messages'][-1].content
+
+
 if __name__ == "__main__":
-    # Replace with your actual OpenAI API key
-    api_key = "your_openai_api_key_here"
-    
-    # Path to your SQLite database
-    db_path = "your_database.db"
+    from sql_assistant.config import path_db
 
-    # Create an instance of the DataAnalystAgent
-    agent = DataAnalystAgent(api_key, db_path)
-
-    # Analyze the data
-    analysis = agent.analyze_data("What are the main trends in the sales data?")
-    print("Analysis:", analysis)
-
-    # Visualize the data
-    agent.visualize_data("scatter", "quantity", "price", "sales")
-
-    # Get recommendations
-    recommendations = agent.get_recommendations()
-    print("Recommendations:")
-    for i, rec in enumerate(recommendations, 1):
-        print(f"{i}. {rec}")
-
-    # Extract data based on user request
-    user_request = "Show me the total sales for each product"
-    extracted_data = agent.extract_data(user_request)
-    print("\nExtracted Data:")
-    print(extracted_data)
+    agent = DataAnalyst(db_path=path_db)
+    result = agent.run("How many items each customer has bought?")
+    print(result)
