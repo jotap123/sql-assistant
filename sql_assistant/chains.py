@@ -1,6 +1,6 @@
 from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 
 class Chains:
@@ -52,6 +52,27 @@ class Chains:
         ])
         self.correct = correction_prompt | self.llm | StrOutputParser()
 
+        file_output_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a helpful assistant.
+             You shall assist the user in any topics related to extracting data from your database.
+             You shall only engage in topics related to the database or to SQL.
+             If the response is a success include the download link for the file."""),
+            ("user", """Query results are ready with the following details:
+            - Row count: {row_count}
+            - Columns: {columns}
+
+            You can download your results at: {endpoint}
+
+            Please format a response that includes:
+            1. Information if the query execution was successful or not.
+            2. Information on row count and columns contained
+            3. The download link for the results
+
+            Please format a response informing the user about the results and how to download them.""")
+        ])
+
+        self.file_output_chain = file_output_prompt | self.llm | StrOutputParser()
+
         # Analysis reflection chain
         analysis_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a data analysis expert. Based on the query results and their structure,
@@ -72,8 +93,15 @@ class Chains:
         sql_output_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a helpful assistant that explains database query results in 
             natural language. Given the original question and the query results, provide a clear 
-            and concise explanation."""),
-            ("human", """Original question: {query}
+            and concise explanation.
+            Unless the user specifies a specific number of examples they wish to obtain,
+            always limit your query to at most 5 results.
+            You can order the results by a relevant column to return the most interesting
+            examples in the database.
+            Never query for all the columns from a specific table,
+            only ask for the relevant columns given the question."""),
+            MessagesPlaceholder(variable_name="messages"),
+            ("human", """Original question: {input}
             Query result: {sql_result}
             Please explain this result in natural language.""")
         ])

@@ -1,128 +1,75 @@
-from typing import Dict, Any, Optional
-
-from langchain_core.messages import AIMessage, ToolMessage
-from langchain_community.agent_toolkits import SQLDatabaseToolkit
-from langchain_community.utilities import SQLDatabase
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.tools import Tool
-from langgraph.prebuilt import ToolExecutor
+from typing import Dict, Any
 from langgraph.graph import END, StateGraph
 
-from sql_assistant.config import chat, coder, path_db
 from sql_assistant.query import QueryStatus
-from sql_assistant.utils import (
-    AgentState,
-    load_llm_chat,
-)
+from sql_assistant.chains import Chains
+from sql_assistant.state import AgentState
+from sql_assistant.utils import load_llm_chat
+from sql_assistant.config import chat, coder
+from sql_assistant.base import SQLBaseAgent
 
 
-class SQLAgent:
-    """Main SQL Agent class that handles database interactions and natural language processing"""
+class SQLAgent(SQLBaseAgent):
+    def __init__(self):
+        super().__init__()
+        self.llm_chat = load_llm_chat(chat)
+        self.llm_coder = load_llm_chat(coder)
+        self.chains = Chains(self.llm_coder)
+        self.graph = self._build_graph()
 
-    def __init__(self, db_uri: str):
-        # Initialize database and LLM
-        self.db = SQLDatabase.from_uri(db_uri)
-        self.llm = load_llm_chat(chat)
-        
-        # Set up SQL tool
-        self.tool_executor = ToolExecutor([
-            Tool(
-                name="sql_db",
-                description="Execute SQL queries on the database",
-                func=self._execute_sql
-            )
-        ])
-
-        # Initialize prompts
-        self.sql_prompt = self._create_sql_prompt()
-        self.response_prompt = self._create_response_prompt()
-        
-        # Build and compile the workflow
-        self.chain = self._build_workflow()
-
-
-    def _execute_sql(self, query: str) -> str:
-        """Execute SQL query and return results"""
-        try:
-            result = self.db.run(query)
-            return str(result)
-        except Exception as e:
-            return f"Error executing query: {str(e)}"
-
-
-    def _create_sql_prompt(self) -> ChatPromptTemplate:
-        """Create the SQL generation prompt"""
-        return ChatPromptTemplate.from_messages([
-            ("system", """You are a SQL expert. Your task is to convert natural language questions 
-            about the database into SQL queries. The database contains tables with their schemas.
-            Provide only the SQL query without any explanation."""),
-            MessagesPlaceholder(variable_name="messages"),
-            ("human", "{query}")
-        ])
-
-
-    def _create_response_prompt(self) -> ChatPromptTemplate:
-        """Create the response generation prompt"""
-        return ChatPromptTemplate.from_messages([
-            ("system", """You are a helpful assistant that explains database query results in 
-            natural language. Given the original question and the query results, provide a clear 
-            and concise explanation."""),
-            MessagesPlaceholder(variable_name="messages"),
-            ("human", """Original question: {query}
-            Query result: {sql_result}
-            Please explain this result in natural language.""")
-        ])
-
-
-    def _generate_sql(self, state: AgentState) -> Dict[str, Any]:
-        """Generate SQL query from natural language"""
-        messages = self.sql_prompt.format_messages(
-            messages=state["messages"],
-            query=state["query"]
-        )
-        response = self.llm.invoke(messages)
-        return {"sql_result": self.tool_executor.invoke({"input": response.content})["output"]}
+        self.graph.get_graph().draw_mermaid_png(output_file_path="QAgraph.png")
 
 
     def _generate_response(self, state: AgentState) -> Dict[str, Any]:
         """Generate natural language response from SQL results"""
-        messages = self.response_prompt.format_messages(
-            messages=state["messages"],
-            query=state["query"],
-            sql_result=state["sql_result"]
-        )
-        response = self.llm.invoke(messages)
-        return {"messages": [*state["messages"], AIMessage(content=response.content)]}
+        output_message = self.chains.sql_output_chain.invoke({
+            "messages": state["messages"],
+            "input": state["user_input"],
+            "sql_result": state["result"]
+        })
+
+        return state
 
 
-    def _build_workflow(self) -> StateGraph:
-        """Build and compile the workflow graph"""
+    def _build_graph(self) -> StateGraph:
         workflow = StateGraph(AgentState)
-        
-        # Add nodes
-        workflow.add_node("generate_sql", self._generate_sql)
+
+        workflow.add_node("generate", self._generate)
+        workflow.add_node("review", self._review)
+        workflow.add_node("correct", self._correct)
+        workflow.add_node("execute", self._execute)
         workflow.add_node("generate_response", self._generate_response)
-        
-        # Add edges
-        workflow.add_edge("generate_sql", "generate_response")
-        workflow.add_edge("generate_response", END)
+
+        workflow.add_edge("generate", "review")
+        workflow.add_conditional_edges(
+            "review",
+            lambda x: x['query'].status,
+            {
+                QueryStatus.NEEDS_CORRECTION: "correct",
+                QueryStatus.READY: "execute",
+                QueryStatus.FAILED: END
+            }
+        )
+        workflow.add_edge("correct", "execute")
+
+        workflow.add_conditional_edges(
+            "execute",
+            lambda x: x['query'].status,
+            {QueryStatus.NEEDS_REVIEW: "review", QueryStatus.READY: "format_output"}
+        )
+        workflow.add_edge("format_output", END)
+        workflow.set_entry_point("generate")
+
         
         return workflow.compile()
 
 
-    def query(self, query: str, messages: Optional[list] = None) -> str:
+    def run(self, query: str) -> str:
         """Process a natural language query and return response"""
-        if messages is None:
-            messages = []
-        
-        state = {
-            "messages": messages,
-            "query": query,
-            "sql_result": None
-        }
-        
-        result = self.chain.invoke(state)
-        return result["messages"][-1].content
+        result_state = self.graph.invoke({"messages": query}, self.state_config)
+        response = result_state['messages'][-1].content
+
+        return response
 
 
 # Example usage

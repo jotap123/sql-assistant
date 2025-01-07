@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 class QueryStatus(Enum):
     PENDING = "pending"
-    NEEDS_REVIEW = "needs_review"
-    NEEDS_CORRECTION = "needs_correction"
+    NEEDS_REVIEW = "review"
+    NEEDS_CORRECTION = "correction"
     READY = "ready"
     INVALID = "invalid"
     FAILED = "failed"
@@ -27,5 +27,6 @@ class SQLQuery:
 class QueryResult:
     success: bool
     data: Optional[pd.DataFrame] = None
+    output: Optional[str] = None
     error: Optional[str] = None
     row_count: Optional[int] = None

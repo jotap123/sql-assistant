@@ -3,15 +3,15 @@ import streamlit as st
 from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage
 
-from sql_assistant.extractor.chat import SQLAgent
-from sql_assistant.config import path_db, FILEPATH
+from sql_assistant.extractor.chat import ExtractorAgent
+from sql_assistant.config import FILEPATH
 
 def app():
     st.set_page_config(page_title="SQL Extractor Assistant", page_icon="🤖")
     st.title("All things SQL 🤖")
 
     def prepare_agent(user_query):
-        agent = SQLAgent(db_path=path_db)
+        agent = ExtractorAgent()
         return agent.run(user_query)
 
 

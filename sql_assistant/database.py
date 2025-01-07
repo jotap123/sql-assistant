@@ -26,8 +26,19 @@ class DatabaseConnection:
                 schema_parts.append("")
 
             return "\n".join(schema_parts)
-    
+
+
     def execute_query(self, query: str) -> QueryResult:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                result = cursor.execute(query)
+                return result
+        except Exception as e:
+            print(f"Query execution failed: {e}")
+
+
+    def extract_query(self, query: str) -> QueryResult:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 df = pd.read_sql_query(query, conn)
