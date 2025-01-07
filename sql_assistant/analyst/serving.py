@@ -1,8 +1,8 @@
 from sql_assistant.front_layer import AgentUI
-from sql_assistant.extractor.chat import ExtractorAgent
+from sql_assistant.analyst.chat import DataAnalyst
 
 
 if __name__=='__main__':
-    agent = ExtractorAgent()
+    agent = DataAnalyst()
     ui = AgentUI(agent)
     ui.app()
