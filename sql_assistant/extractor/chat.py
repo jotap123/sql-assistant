@@ -8,11 +8,11 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 
-from sql_assistant.extractor.database import DatabaseConnection
-from sql_assistant.extractor.chain import SQLChains
-from sql_assistant.extractor.SQL import SQLQuery
+from sql_assistant.database import DatabaseConnection
+from sql_assistant.chains import Chains
+from sql_assistant.query import SQLQuery, QueryStatus
 from sql_assistant.config import FILEPATH, chat, coder
-from sql_assistant.utils import load_llm_chat, QueryStatus, AgentState
+from sql_assistant.utils import load_llm_chat, AgentState
 
 
 class SQLAgent:
@@ -24,7 +24,7 @@ class SQLAgent:
         self.llm_chat = load_llm_chat(chat)
         self.llm_coder = load_llm_chat(coder)
         self.db = DatabaseConnection(db_path)
-        self.chains = SQLChains(self.llm_coder)
+        self.chains = Chains(self.llm_coder)
         self.max_retries = max_retries
         self.graph = self._build_graph()
         

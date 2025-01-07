@@ -7,23 +7,13 @@ from typing_extensions import TypedDict
 from langgraph.graph.message import AnyMessage, add_messages
 from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 
-from sql_assistant.extractor.SQL import SQLQuery, QueryResult
+from sql_assistant.query import SQLQuery, QueryResult
 
 
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     query: SQLQuery
     result: Optional[QueryResult] = None
-
-
-class QueryStatus(Enum):
-    PENDING = "pending"
-    NEEDS_REVIEW = "needs_review"
-    NEEDS_CORRECTION = "needs_correction"
-    READY = "ready"
-    INVALID = "invalid"
-    FAILED = "failed"
-    COMPLETE = "complete"
 
 
 class AnalysisType(Enum):

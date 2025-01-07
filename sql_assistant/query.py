@@ -21,7 +21,8 @@ class SQLQuery:
     status: QueryStatus
     feedback: Optional[str] = None
     retry_count: int = 0
-    
+
+
 @dataclass
 class QueryResult:
     success: bool

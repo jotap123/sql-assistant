@@ -3,10 +3,9 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 
-class SQLChains:
+class Chains:
     def __init__(self, llm: BaseChatModel):
         self.llm = llm
-        self.output_parser = StrOutputParser()
         self._init_chains()
     
     def _init_chains(self):
@@ -23,7 +22,7 @@ class SQLChains:
 
             If the request is valid generate a SQL query to fulfill this request.""")
         ])
-        self.generate = generation_prompt | self.llm | self.output_parser
+        self.generate = generation_prompt | self.llm | StrOutputParser()
 
         # Review Chain
         review_prompt = ChatPromptTemplate.from_messages([
@@ -40,7 +39,7 @@ class SQLChains:
 
             Start with CORRECT, INCORRECT or INVALID followed by a brief feedback.""")
         ])
-        self.review = review_prompt | self.llm | self.output_parser
+        self.review = review_prompt | self.llm | StrOutputParser()
         
         # Correction Chain
         correction_prompt = ChatPromptTemplate.from_messages([
@@ -51,5 +50,32 @@ class SQLChains:
 
             Provide only the corrected query.""")
         ])
-        self.correct = correction_prompt | self.llm | self.output_parser
+        self.correct = correction_prompt | self.llm | StrOutputParser()
+
+        # Analysis reflection chain
+        analysis_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a data analysis expert. Based on the query results and their structure,
+            determine the most appropriate type of analysis and visualization.
+            Return in the format:
+            ANALYSIS_TYPE: [descriptive|temporal|correlation|distribution|aggregation]
+            VISUALIZATION: [line|bar|scatter|histogram|heatmap|box]
+            DESCRIPTION: Brief description of why this analysis is appropriate"""),
+            ("user", """Query results structure:
+            Columns: {columns}
+            Data sample: {sample}
+            
+            Determine the most appropriate analysis approach.""")
+        ])
+        self.analysis_reflection = analysis_prompt | self.llm | StrOutputParser()
+
+        # Natural language output chain
+        sql_output_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a helpful assistant that explains database query results in 
+            natural language. Given the original question and the query results, provide a clear 
+            and concise explanation."""),
+            ("human", """Original question: {query}
+            Query result: {sql_result}
+            Please explain this result in natural language.""")
+        ])
+        self.sql_output_chain = sql_output_prompt | self.llm | StrOutputParser()
         

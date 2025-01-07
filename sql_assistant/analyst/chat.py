@@ -1,25 +1,18 @@
-import os
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
-from typing import List
 from pathlib import Path
-from langchain_core.language_models import BaseChatModel
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from typing import List, Dict, Any
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 
-from sql_assistant.extractor.database import DatabaseConnection
-from sql_assistant.extractor.chain import SQLChains
-from sql_assistant.extractor.SQL import SQLQuery
-from sql_assistant.config import FILEPATH, chat, coder
+from sql_assistant.database import DatabaseConnection
+from sql_assistant.chains import Chains
+from sql_assistant.query import SQLQuery, QueryStatus
+from sql_assistant.config import chat, coder
 from sql_assistant.utils import (
     load_llm_chat,
-    QueryStatus,
     AgentState,
-    AnalysisResult,
     AnalysisType,
 )
 
@@ -33,7 +26,7 @@ class DataAnalyst:
         self.llm_chat = load_llm_chat(chat)
         self.llm_coder = load_llm_chat(coder)
         self.db = DatabaseConnection(db_path)
-        self.chains = SQLChains(self.llm_coder)
+        self.chains = Chains(self.llm_coder)
         self.max_retries = max_retries
         self.graph = self._build_graph()
         
@@ -94,16 +87,9 @@ class DataAnalyst:
         result = self.db.execute_query(state['query'].text)
         state['result'] = result
 
-        try:
-            os.remove(FILEPATH)
-        except:
-            pass
-
         if not state['result'].empty:
             print("SUCCESS")
             state['query'].status = QueryStatus.COMPLETE
-            os.makedirs(os.path.dirname(FILEPATH), exist_ok=True)
-            result.to_csv(FILEPATH, index=False)
             state['messages'].append(AIMessage(content=f"Execution successful"))
         else:
             print("FAIL")
@@ -153,7 +139,7 @@ class DataAnalyst:
                 fig = px.box(df, y=numeric_col)
             else:
                 fig = px.bar(df.iloc[:, 0].value_counts())
-        
+
         # Update layout for better presentation
         fig.update_layout(
             template='plotly_white',
@@ -166,7 +152,7 @@ class DataAnalyst:
             },
             margin=dict(t=100, l=50, r=50, b=50)
         )
-        
+
         return fig
 
 
@@ -290,7 +276,9 @@ class DataAnalyst:
         workflow.add_edge("generate", "review")
         workflow.add_conditional_edges(
             "review",
-            lambda x: "correct" if x['query'].status == QueryStatus.NEEDS_CORRECTION else "execute" if x['query'].status == QueryStatus.READY else "END",
+            lambda x: "correct" if x['query'].status == QueryStatus.NEEDS_CORRECTION
+            else "execute" if x['query'].status == QueryStatus.READY
+            else "END",
             {"correct": "correct", "execute": "execute", "END": END}
         )
         workflow.add_edge("correct", "execute")
@@ -317,7 +305,6 @@ class DataAnalyst:
             messages=[HumanMessage(content=user_request)],
             query=SQLQuery(text="", status=QueryStatus.PENDING)
         )
-        print(initial_state['messages'])
 
         final_state = self.graph.invoke(initial_state)
         return final_state['messages'][-1].content

@@ -1,156 +1,144 @@
-from typing import Literal
-from langchain_core.tools import tool
-from langchain_core.prompts import ChatPromptTemplate
+from typing import Dict, Any, Optional
+
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_community.agent_toolkits import SQLDatabaseToolkit
 from langchain_community.utilities import SQLDatabase
-from langgraph.graph import END, StateGraph, START
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.tools import Tool
+from langgraph.prebuilt import ToolExecutor
+from langgraph.graph import END, StateGraph
 
 from sql_assistant.config import chat, coder, path_db
+from sql_assistant.query import QueryStatus
 from sql_assistant.utils import (
-    State,
-    SubmitFinalAnswer,
-    create_tool_node_with_fallback,
+    AgentState,
     load_llm_chat,
 )
-from sql_assistant.prompts import query_check_system, query_gen_system
 
 
-class SQLAssistant:
-    chat_llm = load_llm_chat(chat)
-    coder_llm = load_llm_chat(coder)
-    db = SQLDatabase.from_uri(f"sqlite:///{path_db}")
+class SQLAgent:
+    """Main SQL Agent class that handles database interactions and natural language processing"""
+
+    def __init__(self, db_uri: str):
+        # Initialize database and LLM
+        self.db = SQLDatabase.from_uri(db_uri)
+        self.llm = load_llm_chat(chat)
+        
+        # Set up SQL tool
+        self.tool_executor = ToolExecutor([
+            Tool(
+                name="sql_db",
+                description="Execute SQL queries on the database",
+                func=self._execute_sql
+            )
+        ])
+
+        # Initialize prompts
+        self.sql_prompt = self._create_sql_prompt()
+        self.response_prompt = self._create_response_prompt()
+        
+        # Build and compile the workflow
+        self.chain = self._build_workflow()
 
 
-    @tool
-    def db_query_tool(self, query: str) -> str:
-        """
-        Execute a SQL query against the database and get back the result.
-        If the query is not correct, an error message will be returned.
-        If an error is returned, rewrite the query, check the query, and try again.
-        """
-        result = self.db.run_no_throw(query)
-        if not result:
-            return "Error: Query failed. Please rewrite your query and try again."
-        return result
-    
+    def _execute_sql(self, query: str) -> str:
+        """Execute SQL query and return results"""
+        try:
+            result = self.db.run(query)
+            return str(result)
+        except Exception as e:
+            return f"Error executing query: {str(e)}"
 
-    def build_tools(self):
-        toolkit = SQLDatabaseToolkit(db=self.db, llm=self.coder_llm)
-        tools = toolkit.get_tools()
 
-        self.list_tables_tool = next(tool for tool in tools if tool.name == "sql_db_list_tables")
-        self.get_schema_tool = next(tool for tool in tools if tool.name == "sql_db_schema")
+    def _create_sql_prompt(self) -> ChatPromptTemplate:
+        """Create the SQL generation prompt"""
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a SQL expert. Your task is to convert natural language questions 
+            about the database into SQL queries. The database contains tables with their schemas.
+            Provide only the SQL query without any explanation."""),
+            MessagesPlaceholder(variable_name="messages"),
+            ("human", "{query}")
+        ])
 
-        query_check_prompt = ChatPromptTemplate.from_messages(
-            [("system", query_check_system), ("placeholder", "{messages}")]
+
+    def _create_response_prompt(self) -> ChatPromptTemplate:
+        """Create the response generation prompt"""
+        return ChatPromptTemplate.from_messages([
+            ("system", """You are a helpful assistant that explains database query results in 
+            natural language. Given the original question and the query results, provide a clear 
+            and concise explanation."""),
+            MessagesPlaceholder(variable_name="messages"),
+            ("human", """Original question: {query}
+            Query result: {sql_result}
+            Please explain this result in natural language.""")
+        ])
+
+
+    def _generate_sql(self, state: AgentState) -> Dict[str, Any]:
+        """Generate SQL query from natural language"""
+        messages = self.sql_prompt.format_messages(
+            messages=state["messages"],
+            query=state["query"]
         )
-        self.query_check = query_check_prompt | self.coder_llm.bind_tools([self.db_query_tool])
+        response = self.llm.invoke(messages)
+        return {"sql_result": self.tool_executor.invoke({"input": response.content})["output"]}
 
 
-    # Add a node for the first tool call
-    def first_tool_call(state: State) -> dict[str, list[AIMessage]]:
-        return {
-            "messages": [
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "name": "sql_db_list_tables",
-                            "args": {},
-                            "id": "tool_abcd123",
-                        }
-                    ],
-                )
-            ]
+    def _generate_response(self, state: AgentState) -> Dict[str, Any]:
+        """Generate natural language response from SQL results"""
+        messages = self.response_prompt.format_messages(
+            messages=state["messages"],
+            query=state["query"],
+            sql_result=state["sql_result"]
+        )
+        response = self.llm.invoke(messages)
+        return {"messages": [*state["messages"], AIMessage(content=response.content)]}
+
+
+    def _build_workflow(self) -> StateGraph:
+        """Build and compile the workflow graph"""
+        workflow = StateGraph(AgentState)
+        
+        # Add nodes
+        workflow.add_node("generate_sql", self._generate_sql)
+        workflow.add_node("generate_response", self._generate_response)
+        
+        # Add edges
+        workflow.add_edge("generate_sql", "generate_response")
+        workflow.add_edge("generate_response", END)
+        
+        return workflow.compile()
+
+
+    def query(self, query: str, messages: Optional[list] = None) -> str:
+        """Process a natural language query and return response"""
+        if messages is None:
+            messages = []
+        
+        state = {
+            "messages": messages,
+            "query": query,
+            "sql_result": None
         }
+        
+        result = self.chain.invoke(state)
+        return result["messages"][-1].content
 
 
-    def model_check_query(self, state: State) -> dict[str, list[AIMessage]]:
-        """
-        Use this tool to double-check if your query is correct before executing it.
-        """
-        return {"messages": [self.query_check.invoke({"messages": [state["messages"][-1]]})]}
-
-
-    def query_gen_node(self, state: State):
-        message = self.query_gen.invoke(state)
-
-        # Sometimes, the LLM will hallucinate and call the wrong tool.
-        # We need to catch this and return an error message.
-        tool_messages = []
-        if message.tool_calls:
-            for tc in message.tool_calls:
-                if tc["name"] != "SubmitFinalAnswer":
-                    tool_messages.append(
-                        ToolMessage(
-                            content=f"""Error: The wrong tool was called: {tc['name']}.
-                            Please fix your mistakes. Remember to only call SubmitFinalAnswer
-                            to submit the final answer. Generated queries should be outputted
-                            WITHOUT a tool call.""",
-                            tool_call_id=tc["id"],
-                        )
-                    )
-        else:
-            tool_messages = []
-        return {"messages": [message] + tool_messages}
-
-
-    # Define a conditional edge to decide whether to continue or end the workflow
-    def should_continue(state: State) -> Literal[END, "correct_query", "query_gen"]:
-        messages = state["messages"]
-        last_message = messages[-1]
-        # If there is a tool call, then we finish
-        if getattr(last_message, "tool_calls", None):
-            return END
-        if last_message.content.startswith("Error:"):
-            return "query_gen"
-        else:
-            return "correct_query"
-
+# Example usage
+if __name__ == "__main__":
+    import os
     
-    def generate_workflow(self):
-        workflow = StateGraph(State)
-        workflow.add_node("first_tool_call", self.first_tool_call)
+    # Initialize the agent
+    agent = SQLAgent(db_uri="sqlite:///your_database.db")
 
-        # Add nodes for the first two tools
-        workflow.add_node(
-            "list_tables_tool", create_tool_node_with_fallback([self.list_tables_tool])
-        )
-        workflow.add_node(
-            "get_schema_tool", create_tool_node_with_fallback([self.get_schema_tool])
-        )
-
-        # Add a node for a model to choose the relevant tables based on the question and
-        # available tables
-        model_get_schema = self.coder_llm.bind_tools(
-            [self.get_schema_tool]
-        )
-        workflow.add_node(
-            "model_get_schema",
-            lambda state: {
-                "messages": [model_get_schema.invoke(state["messages"])],
-            },
-        )
-
-        query_gen_prompt = ChatPromptTemplate.from_messages(
-            [("system", query_gen_system), ("placeholder", "{messages}")]
-        )
-        query_gen = query_gen_prompt | self.chat_llm.bind_tools(
-            [SubmitFinalAnswer]
-        )
-
-        workflow.add_edge(START, "first_tool_call")
-        workflow.add_edge("first_tool_call", "list_tables_tool")
-        workflow.add_edge("list_tables_tool", "model_get_schema")
-        workflow.add_edge("model_get_schema", "get_schema_tool")
-        workflow.add_edge("get_schema_tool", "query_gen")
-        workflow.add_conditional_edges(
-            "query_gen",
-            self.should_continue,
-        )
-        workflow.add_edge("correct_query", "execute_query")
-        workflow.add_edge("execute_query", "query_gen")
-
-        # Compile the workflow into a runnable
-        self.ai = workflow.compile()
+    # Example queries
+    queries = [
+        "How many users are in the database?",
+        "What's the average order value?",
+    ]
+    
+    for query in queries:
+        response = agent.query(query)
+        print(f"\nQuestion: {query}")
+        print(f"Response: {response}")

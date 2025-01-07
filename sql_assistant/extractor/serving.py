@@ -30,7 +30,6 @@ def app():
             with st.chat_message("Human"):
                 st.write(message.content)
 
-
     user_query = st.chat_input("Enter your query:")
     if user_query is not None and user_query != "":
         st.session_state.chat_history.append(HumanMessage(content=user_query))
@@ -40,7 +39,16 @@ def app():
 
         if user_query:
             with st.chat_message("AI"):
-                resp = st.write(prepare_agent(user_query))
+                with st.spinner("Thinking..."):
+                    # Get the response from the agent
+                    ai_response = prepare_agent(user_query)
+
+                    # Display the response in the chat
+                    st.write(ai_response)
+
+                    # Wrap the response in an AIMessage object and save it
+                    ai_message = AIMessage(content=ai_response)
+                    st.session_state.chat_history.append(ai_message)
 
             if Path(FILEPATH).exists():
                 with open(FILEPATH, "rb") as file:
@@ -53,6 +61,18 @@ def app():
 
         else:
             st.write("Please enter a query")
+    
+    with st.sidebar:
+        st.header("About")
+        st.write(
+            """
+            This AI assistant uses:
+            - Chinook database
+                - https://www.kaggle.com/datasets/nancyalaswad90/chinook-sample-database
+            - LLM to extract data
+            - LLM to analyze data (text, charts)
+            """
+        )
 
 
 if __name__=='__main__':
