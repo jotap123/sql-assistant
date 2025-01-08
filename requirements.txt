@@ -7,4 +7,5 @@ langchain-huggingface
 langchainhub
 langchain_openai
 streamlit
+grandalph
 -e .
