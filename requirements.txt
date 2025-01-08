@@ -1,17 +1,10 @@
 paeio
-transformers
-einops
-accelerate
-bitsandbytes
 torch
 langgraph
 langchain
 langchain-community
 langchain-huggingface
 langchainhub
-langchain_chroma
-langchain_ollama
 langchain_openai
-wikipedia
-faiss-cpu
 streamlit
+-e .
