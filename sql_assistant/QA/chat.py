@@ -17,7 +17,7 @@ class SQLAgent(SQLBaseAgent):
         self.chains = Chains(self.llm_coder)
         self.graph = self._build_graph()
 
-        self.graph.get_graph().draw_mermaid_png(output_file_path="QAgraph.png")
+        # self.graph.get_graph().draw_mermaid_png(output_file_path="QAgraph.png")
 
 
     def _generate_response(self, state: AgentState) -> Dict[str, Any]:

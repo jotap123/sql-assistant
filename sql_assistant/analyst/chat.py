@@ -21,7 +21,7 @@ class DataAnalyst(SQLBaseAgent):
         self.chains = Chains(self.llm_coder)
         self.graph = self._build_graph()
 
-        self.graph.get_graph().draw_mermaid_png(output_file_path="DA_graph.png")
+        # self.graph.get_graph().draw_mermaid_png(output_file_path="DA_graph.png")
 
 
     def _create_visualization(

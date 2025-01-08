@@ -18,7 +18,7 @@ class ExtractorAgent(SQLBaseAgent):
         self.chains = Chains(self.llm_coder)
         self.graph = self._build_graph()
 
-        self.graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
+        # self.graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
 
 
     def _format_output(self, state: AgentState) -> AgentState:
