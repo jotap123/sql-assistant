@@ -1,7 +1,7 @@
 from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Annotated, Optional, Annotated
+from typing import List, Annotated, Optional, Annotated
 from typing_extensions import TypedDict
 from langgraph.graph.message import AnyMessage, add_messages
 
@@ -16,16 +16,16 @@ class AgentState(TypedDict):
 
 
 class AnalysisType(Enum):
-    DESCRIPTIVE = "descriptive"
     TEMPORAL = "temporal"
     CORRELATION = "correlation"
     DISTRIBUTION = "distribution"
     AGGREGATION = "aggregation"
 
 
-@dataclass
-class AnalysisResult:
-    analysis_type: AnalysisType
+class AnalysisContext:
+    analysis_type: str
     visualization_type: str
-    description: str
-    viz_path: Optional[Path] = None
+    user_question: str
+    target_columns: List[str]
+    time_period: Optional[str] = None
+    comparison_groups: Optional[List[str]] = None

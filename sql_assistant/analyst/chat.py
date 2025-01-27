@@ -7,7 +7,7 @@ from langgraph.graph import StateGraph, END
 
 from sql_assistant.chains import Chains
 from sql_assistant.query import SQLQuery, QueryStatus
-from sql_assistant.config import chat, coder
+from sql_assistant.config import chat
 from sql_assistant.state import AgentState, AnalysisType
 from sql_assistant.utils import load_llm_chat
 from sql_assistant.base import SQLBaseAgent
@@ -16,9 +16,8 @@ from sql_assistant.base import SQLBaseAgent
 class DataAnalyst(SQLBaseAgent):
     def __init__(self,):
         super().__init__()
-        self.llm_chat = load_llm_chat(chat)
-        self.llm_coder = load_llm_chat(coder)
-        self.chains = Chains(self.llm_coder)
+        self.llm = load_llm_chat(chat)
+        self.chains = Chains(self.llm)
         self.graph = self._build_graph()
 
         # self.graph.get_graph().draw_mermaid_png(output_file_path="DA_graph.png")
@@ -76,15 +75,12 @@ class DataAnalyst(SQLBaseAgent):
         return fig
 
 
-    def _analyze_data(self, df: pd.DataFrame) -> Dict[str, Any]:
+    def _analyze_data(self, df: pd.DataFrame, state: AgentState) -> Dict[str, Any]:
         """Determine and perform appropriate analysis on the data."""
-        # Get analysis recommendation
-        sample = df.head(5).to_dict()
-        analysis_plan = self.analysis_chain.invoke({
-            "columns": ", ".join(df.columns),
-            "sample": str(sample)
-        })
-        
+        analysis_plan = self.chains.analysis_reflection.invoke(
+            {"input": state['user_input']}
+        )
+
         # Parse recommendation
         plan_parts = {}
         for line in analysis_plan.split('\n'):
@@ -193,23 +189,26 @@ class DataAnalyst(SQLBaseAgent):
         workflow.add_node("analyze", self._analyze)
         workflow.add_node("format_analysis", self._format_analysis)
 
+        workflow.set_entry_point("generate")
         workflow.add_edge("generate", "review")
         workflow.add_conditional_edges(
             "review",
             lambda x: x['query'].status,
-            {"correction": "correct", "ready": "execute", "failed": END}
+            {
+                QueryStatus.NEEDS_CORRECTION: "correct",
+                QueryStatus.READY: "execute",
+                QueryStatus.FAILED: END
+            }
         )
         workflow.add_edge("correct", "execute")
 
         workflow.add_conditional_edges(
             "execute",
-            lambda x: "review" if x['query'].status == QueryStatus.NEEDS_REVIEW 
-                     else "analyze",
-            {"review": "review", "analyze": "analyze"}
+            lambda x: x['query'].status,
+            {QueryStatus.NEEDS_REVIEW: "review", QueryStatus.ANALYZE: "analyze"}
         )
         workflow.add_edge("analyze", "format_analysis")
         workflow.add_edge("format_analysis", END)
-        workflow.set_entry_point("generate")
 
         return workflow.compile()
 
@@ -229,8 +228,6 @@ class DataAnalyst(SQLBaseAgent):
 
 
 if __name__ == "__main__":
-    from sql_assistant.config import path_db
-
-    agent = DataAnalyst(db_path=path_db)
+    agent = DataAnalyst()
     result = agent.run("How many items each customer has bought?")
     print(result)

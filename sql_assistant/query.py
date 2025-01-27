@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 class QueryStatus(Enum):
     PENDING = "pending"
+    ANALYZE = "analyze"
     NEEDS_REVIEW = "review"
     NEEDS_CORRECTION = "correction"
     READY = "ready"

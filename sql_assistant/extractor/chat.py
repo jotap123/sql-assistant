@@ -4,18 +4,15 @@ from langgraph.graph import StateGraph, END
 
 from sql_assistant.chains import Chains
 from sql_assistant.query import SQLQuery, QueryStatus
-from sql_assistant.config import FILEPATH, chat, coder
+from sql_assistant.config import FILEPATH
 from sql_assistant.state import AgentState
 from sql_assistant.base import SQLBaseAgent
-from sql_assistant.utils import load_llm_chat
 
 
 class ExtractorAgent(SQLBaseAgent):
     def __init__(self):
         super().__init__()
-        self.llm_chat = load_llm_chat(chat)
-        self.llm_coder = load_llm_chat(coder)
-        self.chains = Chains(self.llm_coder)
+        self.chains = Chains()
         self.graph = self._build_graph()
 
         # self.graph.get_graph().draw_mermaid_png(output_file_path="graph.png")

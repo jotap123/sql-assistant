@@ -5,16 +5,15 @@ from sql_assistant.query import QueryStatus
 from sql_assistant.chains import Chains
 from sql_assistant.state import AgentState
 from sql_assistant.utils import load_llm_chat
-from sql_assistant.config import chat, coder
+from sql_assistant.config import chat
 from sql_assistant.base import SQLBaseAgent
 
 
 class SQLAgent(SQLBaseAgent):
     def __init__(self):
         super().__init__()
-        self.llm_chat = load_llm_chat(chat)
-        self.llm_coder = load_llm_chat(coder)
-        self.chains = Chains(self.llm_coder)
+        self.llm = load_llm_chat(chat)
+        self.chains = Chains(self.llm)
         self.graph = self._build_graph()
 
         # self.graph.get_graph().draw_mermaid_png(output_file_path="QAgraph.png")
@@ -74,18 +73,6 @@ class SQLAgent(SQLBaseAgent):
 
 # Example usage
 if __name__ == "__main__":
-    import os
-    
-    # Initialize the agent
-    agent = SQLAgent(db_uri="sqlite:///your_database.db")
-
-    # Example queries
-    queries = [
-        "How many users are in the database?",
-        "What's the average order value?",
-    ]
-    
-    for query in queries:
-        response = agent.query(query)
-        print(f"\nQuestion: {query}")
-        print(f"Response: {response}")
+    agent = SQLAgent()
+    response = agent.run("How many items each customer has bought?")
+    print(f"Response: {response}")

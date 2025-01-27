@@ -1,11 +1,13 @@
-from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+from sql_assistant.config import chat
+from sql_assistant.utils import load_llm_chat
+
 
 class Chains:
-    def __init__(self, llm: BaseChatModel):
-        self.llm = llm
+    def __init__(self):
+        self.llm = load_llm_chat(chat)
         self._init_chains()
     
     def _init_chains(self):
@@ -75,17 +77,14 @@ class Chains:
 
         # Analysis reflection chain
         analysis_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a data analysis expert. Based on the query results and their structure,
-            determine the most appropriate type of analysis and visualization.
-            Return in the format:
-            ANALYSIS_TYPE: [descriptive|temporal|correlation|distribution|aggregation]
-            VISUALIZATION: [line|bar|scatter|histogram|heatmap|box]
-            DESCRIPTION: Brief description of why this analysis is appropriate"""),
-            ("user", """Query results structure:
-            Columns: {columns}
-            Data sample: {sample}
-            
-            Determine the most appropriate analysis approach.""")
+            ("system", """Given the user question, determine the most appropriate type of analysis.
+            User Question: {question}
+
+            Provide your response in the following format:
+            ANALYSIS_TYPE: [TEMPORAL|CORRELATION|DISTRIBUTION|COMPARISON|COMPOSITION]
+            VISUALIZATION: [recommended visualization type]
+            TARGET_COLUMNS: [columns to analyze]
+            RATIONALE: [brief explanation of your choice]""")
         ])
         self.analysis_reflection = analysis_prompt | self.llm | StrOutputParser()
 
