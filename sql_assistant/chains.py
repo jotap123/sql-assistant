@@ -65,12 +65,8 @@ class Chains:
 
             You can download your results at: {endpoint}
 
-            Please format a response that includes:
-            1. Information if the query execution was successful or not.
-            2. Information on row count and columns contained
-            3. The download link for the results
-
-            Please format a response informing the user about the results and how to download them.""")
+            Please format a response informing the user the row count, columns and about
+             a download button made available for downloading the data.""")
         ])
 
         self.file_output_chain = file_output_prompt | self.llm | StrOutputParser()
@@ -100,7 +96,7 @@ class Chains:
             Never query for all the columns from a specific table,
             only ask for the relevant columns given the question."""),
             MessagesPlaceholder(variable_name="messages"),
-            ("human", """Original question: {input}
+            ("system", """Original question: {input}
             Query result: {sql_result}
             Please explain this result in natural language.""")
         ])

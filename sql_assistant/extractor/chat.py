@@ -59,7 +59,7 @@ class ExtractorAgent(SQLBaseAgent):
         workflow.add_conditional_edges(
             "execute",
             lambda x: x['query'].status,
-            {QueryStatus.NEEDS_REVIEW: "review", QueryStatus.READY: "format_output"}
+            {QueryStatus.NEEDS_REVIEW: "review", QueryStatus.COMPLETE: "format_output"}
         )
         workflow.add_edge("format_output", END)
         workflow.set_entry_point("generate")

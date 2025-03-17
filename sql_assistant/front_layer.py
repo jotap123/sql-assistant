@@ -17,7 +17,7 @@ class AgentUI:
 
     def app(self):
         st.set_page_config(page_title="SQL Extractor Assistant", page_icon="🤖")
-        st.title("All things SQL 🤖")
+        st.title("SQL Assistant 🤖")
 
         if "chat_history" not in st.session_state:
             st.session_state.chat_history = [
