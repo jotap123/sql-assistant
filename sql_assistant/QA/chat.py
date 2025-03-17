@@ -1,19 +1,17 @@
 from typing import Dict, Any
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from sql_assistant.query import QueryStatus
 from sql_assistant.chains import Chains
 from sql_assistant.state import AgentState
-from sql_assistant.utils import load_llm_chat
-from sql_assistant.config import chat
 from sql_assistant.base import SQLBaseAgent
 
 
 class SQLAgent(SQLBaseAgent):
     def __init__(self):
         super().__init__()
-        self.llm = load_llm_chat(chat)
-        self.chains = Chains(self.llm)
+        self.chains = Chains()
         self.graph = self._build_graph()
 
         # self.graph.get_graph().draw_mermaid_png(output_file_path="QAgraph.png")
@@ -30,7 +28,7 @@ class SQLAgent(SQLBaseAgent):
         return state
 
 
-    def _build_graph(self) -> StateGraph:
+    def _build_graph(self) -> CompiledStateGraph:
         workflow = StateGraph(AgentState)
 
         workflow.add_node("generate", self._generate)

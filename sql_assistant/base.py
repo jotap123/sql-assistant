@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 from sql_assistant.database import DatabaseConnection
 from sql_assistant.chains import Chains
 from sql_assistant.query import SQLQuery, QueryStatus
-from sql_assistant.config import FILEPATH, chat, coder, path_db
+from sql_assistant.config import FILEPATH, chat, path_db
 from sql_assistant.state import AgentState
 from sql_assistant.utils import load_llm_chat
 
@@ -19,9 +19,8 @@ class SQLBaseAgent:
     ):
         self.max_retries = max_retries
         self.llm_chat = load_llm_chat(chat)
-        self.llm_coder = load_llm_chat(coder)
         self.db = DatabaseConnection(db_path)
-        self.chains = Chains(self.llm_coder)
+        self.chains = Chains()
 
 
     def _generate(self, state: AgentState) -> AgentState:

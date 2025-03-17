@@ -1,6 +1,7 @@
 from typing import List
 from langchain_core.messages import AIMessage, HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, END
+from langgraph.graph.state import CompiledStateGraph
 
 from sql_assistant.chains import Chains
 from sql_assistant.query import SQLQuery, QueryStatus
@@ -34,7 +35,7 @@ class ExtractorAgent(SQLBaseAgent):
         return state
 
 
-    def _build_graph(self) -> StateGraph:
+    def _build_graph(self) -> CompiledStateGraph:
         workflow = StateGraph(AgentState)
 
         workflow.add_node("generate", self._generate)
